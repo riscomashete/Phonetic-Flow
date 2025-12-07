@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { TranscriptionHistoryItem } from './types';
 import { getPhoneticTranscription } from './services/geminiService';
 import { IPAChart } from './components/IPAChart';
@@ -9,10 +9,7 @@ import {
   History, 
   Trash2, 
   Sparkles,
-  Check,
-  Settings,
-  Key,
-  Info
+  Check
 } from 'lucide-react';
 
 function App() {
@@ -21,35 +18,6 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [history, setHistory] = useState<TranscriptionHistoryItem[]>([]);
   const [copiedRegion, setCopiedRegion] = useState<'uk' | 'us' | null>(null);
-  
-  // Settings / API Key State
-  const [showSettings, setShowSettings] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [hasKey, setHasKey] = useState(false);
-
-  useEffect(() => {
-    // Check for existing key on mount
-    const storedKey = localStorage.getItem('gemini_api_key');
-    if (storedKey) {
-      setApiKey(storedKey);
-      setHasKey(true);
-    }
-  }, []);
-
-  const handleSaveKey = () => {
-    if (apiKey.trim()) {
-      localStorage.setItem('gemini_api_key', apiKey.trim());
-      setHasKey(true);
-      setShowSettings(false);
-      // Reload to ensure service picks up new key (or we could make service reactive, but this is simpler)
-      window.location.reload(); 
-    } else {
-      localStorage.removeItem('gemini_api_key');
-      setHasKey(false);
-      setApiKey('');
-      window.location.reload();
-    }
-  };
 
   const handleTranscribe = async () => {
     if (!inputText.trim()) return;
@@ -114,35 +82,11 @@ function App() {
       
       {/* Header */}
       <header className="w-full bg-white border-b border-slate-200 py-4 shadow-sm z-20 sticky top-0">
-        <div className="w-full max-w-[1800px] mx-auto px-6 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
-              <span className="font-serif italic font-bold text-xl">ə</span>
-            </div>
-            <h1 className="text-xl font-bold text-slate-800 tracking-tight">Phonetic Flow</h1>
+        <div className="w-full max-w-[1800px] mx-auto px-6 flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+            <span className="font-serif italic font-bold text-xl">ə</span>
           </div>
-          
-          <button 
-            onClick={() => setShowSettings(true)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-              hasKey 
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' 
-                : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-            }`}
-          >
-            {hasKey ? (
-              <>
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Live AI Active</span>
-              </>
-            ) : (
-              <>
-                <Info className="w-3.5 h-3.5" />
-                <span>Demo Mode</span>
-              </>
-            )}
-            <Settings className="w-3.5 h-3.5 ml-1 opacity-50" />
-          </button>
+          <h1 className="text-xl font-bold text-slate-800 tracking-tight">Phonetic Flow</h1>
         </div>
       </header>
 
@@ -183,16 +127,11 @@ function App() {
                 />
               </div>
 
-              <div className="mt-4 flex justify-between items-center">
-                 {!hasKey && (
-                   <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded-md hidden sm:inline-block">
-                     Demo Mode: AI features limited
-                   </span>
-                 )}
+              <div className="mt-4 flex justify-end">
                 <button
                   onClick={handleTranscribe}
                   disabled={isLoading || !inputText.trim()}
-                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-semibold transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed transform active:scale-95 ml-auto"
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-semibold transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed transform active:scale-95"
                 >
                   {isLoading ? (
                     <>
@@ -245,4 +184,88 @@ function App() {
                      <div className="flex items-center gap-2 text-slate-400 text-sm font-mono uppercase tracking-widest">
                         <span className="text-lg">🇺🇸</span> United States
                      </div>
-                     <div className="font-serif text-2xl md:text-3xl tracking-wide leading
+                     <div className="font-serif text-2xl md:text-3xl tracking-wide leading-relaxed text-center">
+                        /{result.us}/
+                     </div>
+                     <div className="flex gap-3 mt-2">
+                        <button 
+                          onClick={() => handleSpeak(inputText, 'en-US')}
+                          className="p-2.5 bg-white/10 hover:bg-white/20 rounded-full text-indigo-300 hover:text-white transition-all"
+                          title="Listen (US)"
+                        >
+                          <Volume2 className="w-5 h-5" />
+                        </button>
+                        <button 
+                          onClick={() => handleCopy(result.us, 'us')}
+                          className="p-2.5 bg-white/10 hover:bg-white/20 rounded-full text-indigo-300 hover:text-white transition-all"
+                          title="Copy IPA"
+                        >
+                          {copiedRegion === 'us' ? <Check className="w-5 h-5 text-emerald-400" /> : <Copy className="w-5 h-5" />}
+                        </button>
+                     </div>
+                  </div>
+
+                </div>
+              ) : (
+                <div className="text-slate-600 text-center flex flex-col items-center py-12">
+                  <span className="font-serif text-6xl opacity-20 italic mb-2">ə</span>
+                  <p className="text-sm">Enter text to see regional transcriptions</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* History Section */}
+          {history.length > 0 && (
+            <div className="animate-in fade-in duration-700">
+              <div className="flex items-center justify-between mb-4 px-2">
+                <h3 className="flex items-center gap-2 text-slate-500 font-semibold">
+                  <History className="w-4 h-4" /> Recent Transcriptions
+                </h3>
+                <button 
+                  onClick={clearHistory}
+                  className="text-xs text-red-500 hover:text-red-600 flex items-center gap-1 hover:bg-red-50 px-2 py-1 rounded"
+                >
+                  <Trash2 className="w-3 h-3" /> Clear
+                </button>
+              </div>
+              
+              <div className="space-y-3">
+                {history.map((item) => (
+                  <div 
+                    key={item.id}
+                    onClick={() => restoreHistoryItem(item)}
+                    className="group bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md hover:border-indigo-100 cursor-pointer transition-all flex flex-col sm:flex-row justify-between sm:items-center gap-4"
+                  >
+                    <div className="flex-1">
+                      <p className="font-medium text-slate-900 mb-2">{item.original}</p>
+                      <div className="flex gap-4 text-sm font-serif text-slate-500">
+                        <span className="flex items-center gap-1"><span className="text-xs grayscale opacity-50">🇬🇧</span> /{item.transcription.uk}/</span>
+                        <span className="flex items-center gap-1"><span className="text-xs grayscale opacity-50">🇺🇸</span> /{item.transcription.us}/</span>
+                      </div>
+                    </div>
+                    <div className="text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity self-center sm:self-auto">
+                      <ArrowRight className="w-5 h-5" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right Column: IPA Chart */}
+        <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/60 border border-slate-100 overflow-hidden min-h-[500px]">
+           <IPAChart />
+        </div>
+
+      </main>
+
+      <footer className="py-6 text-center text-slate-400 text-sm">
+        Powered by Gemini AI • Phonetic Flow
+      </footer>
+    </div>
+  );
+}
+
+export default App;
