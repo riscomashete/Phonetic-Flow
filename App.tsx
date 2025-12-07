@@ -262,7 +262,7 @@ function App() {
       </main>
 
       <footer className="py-6 text-center text-slate-400 text-sm">
-        Powered by Gemini AI • Phonetic Flow
+        Built by <span className="font-semibold text-slate-600">Risco Mashete</span> • Powered by Gemini AI
       </footer>
     </div>
   );
