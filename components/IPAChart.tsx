@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { X, Sparkles, Volume2, Play, Activity } from 'lucide-react';
-import { explainIPASymbol } from '../services/geminiService';
+import React, { useState, useRef } from 'react';
+import { X, Sparkles, Volume2, Activity } from 'lucide-react';
+import { explainIPASymbol, generateSymbolAudio } from '../services/geminiService';
 
 const VOWELS = [
   { symbol: 'iː', example: 'see' },
@@ -68,72 +68,159 @@ interface TutorialData {
   };
 }
 
+// Helper: Decode base64 to byte array
+function decodeBase64(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// Helper: Create AudioBuffer from raw PCM (16-bit, 24kHz default for Gemini TTS)
+function createAudioBuffer(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number = 24000,
+  numChannels: number = 1,
+): AudioBuffer {
+  // Calculate frame count based on byte length and format (16-bit = 2 bytes)
+  const frameCount = Math.floor(data.byteLength / (2 * numChannels));
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+  
+  // Use DataView to ensure Little Endian reading of the 16-bit integers
+  const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      // Calculate byte offset for this sample
+      const offset = (i * numChannels + channel) * 2;
+      // Read Int16, normalize to float [-1.0, 1.0]
+      const sample = dataView.getInt16(offset, true); // true = Little Endian
+      channelData[i] = sample < 0 ? sample / 32768 : sample / 32767;
+    }
+  }
+  return buffer;
+}
+
 const MouthVisualizer: React.FC<{ 
   shape: 'rounded' | 'spread' | 'neutral'; 
   voicing: 'voiced' | 'voiceless'; 
   isAnimating: boolean; 
 }> = ({ shape, voicing, isAnimating }) => {
   
-  // Base scales for mouth shapes
-  const getMouthPath = (state: 'rest' | 'active') => {
-    if (state === 'rest') return "M 30,50 Q 50,55 70,50 Q 50,45 30,50"; // Neutral closed mouth
+  // Inner Mouth (Dark Void) Path
+  const getInteriorPath = () => {
+    if (!isAnimating) return "M 30,55 Q 50,55 70,55 Q 50,55 30,55"; // Closed Line
 
     switch (shape) {
-      case 'rounded': // Small circle
+      case 'rounded': // Circle
         return "M 40,40 Q 50,30 60,40 Q 70,50 60,60 Q 50,70 40,60 Q 30,50 40,40";
-      case 'spread': // Wide smile
-        return "M 20,45 Q 50,35 80,45 Q 50,65 20,45";
-      case 'neutral': // Open oval
+      case 'spread': // Wide Smile
+        return "M 25,48 Q 50,42 75,48 Q 75,60 50,60 Q 25,60 25,48";
+      case 'neutral': // Tall Oval (Ah)
       default:
-        return "M 30,40 Q 50,30 70,40 Q 75,50 70,60 Q 50,70 30,60 Q 25,50 30,40";
+        return "M 32,45 Q 50,35 68,45 Q 72,55 68,68 Q 50,78 32,68 Q 28,55 32,45";
+    }
+  };
+
+  // Tongue Path (Pink)
+  const getTonguePath = () => {
+    if (!isAnimating) return ""; // Hidden when closed
+
+    switch (shape) {
+      case 'rounded': // Small hump at bottom
+        return "M 42,56 Q 50,52 58,56 Q 56,62 50,64 Q 44,62 42,56";
+      case 'spread': // Wide flat tongue
+        return "M 30,55 Q 50,52 70,55 Q 65,58 50,58 Q 35,58 30,55";
+      case 'neutral': // Big tongue visible at bottom
+        return "M 36,62 Q 50,55 64,62 Q 60,70 50,72 Q 40,70 36,62";
+      default:
+        return "";
+    }
+  };
+
+  // Teeth Path (White)
+  const getTeethPath = () => {
+    if (!isAnimating) return "";
+
+    switch (shape) {
+      case 'rounded': 
+        return "M 42,42 Q 50,42 58,42 Q 56,48 50,48 Q 44,48 42,42";
+      case 'spread': // Prominent top teeth
+        return "M 30,48 Q 50,48 70,48 Q 68,54 50,54 Q 32,54 30,48";
+      case 'neutral':
+        return "M 36,44 Q 50,44 64,44 Q 60,50 50,50 Q 40,50 36,44";
+      default:
+        return "";
     }
   };
 
   return (
-    <div className="relative w-40 h-40 bg-slate-50 rounded-full border-4 border-slate-100 flex items-center justify-center overflow-hidden">
-      {/* Background Face Outline hint */}
-      <div className="absolute inset-2 border-2 border-slate-100 rounded-full opacity-50"></div>
+    <div className="relative w-48 h-48 bg-orange-50 rounded-full border-4 border-orange-100 flex items-center justify-center overflow-hidden shadow-inner">
+      {/* Background/Skin Tone */}
       
-      {/* Throat / Voicing Indicator */}
-      <div className={`absolute bottom-6 w-8 h-8 rounded-full blur-md transition-all duration-300 ${
-        isAnimating && voicing === 'voiced' ? 'bg-red-400 opacity-60 scale-150 animate-pulse' : 'bg-transparent opacity-0 scale-100'
+      {/* Voicing Glow Indicator (Throat) */}
+      <div className={`absolute w-full h-full rounded-full transition-all duration-300 ${
+        isAnimating && voicing === 'voiced' ? 'bg-red-500/20 shadow-[0_0_30px_rgba(239,68,68,0.4)]' : 'bg-transparent'
       }`}></div>
 
-      <svg width="100" height="100" viewBox="0 0 100 100" className="z-10 relative">
-        {/* Voicing Lines (Zigzag in throat area) */}
-        {isAnimating && voicing === 'voiced' && (
-           <path d="M 40,85 L 45,80 L 50,85 L 55,80 L 60,85" stroke="red" strokeWidth="2" fill="none" className="opacity-50" />
-        )}
-
-        {/* Lips */}
-        <path 
-          d={isAnimating ? getMouthPath('active') : getMouthPath('rest')} 
-          fill={isAnimating && shape === 'rounded' ? "#333" : "none"} // Darker interior for open mouth
-          stroke="#475569" 
-          strokeWidth="3" 
-          strokeLinecap="round" 
-          strokeLinejoin="round"
-          className="transition-all duration-500 ease-in-out"
-        />
+      <svg viewBox="0 0 100 100" className="w-full h-full transform scale-110">
         
-        {/* Interior (Darkness/Tongue hint) if open */}
-        {isAnimating && (
-           <path 
-             d={getMouthPath('active')} 
-             fill="#1e293b" 
-             stroke="none"
-             className="transition-all duration-500 ease-in-out -z-10"
-             style={{ transform: 'scale(0.9)', transformOrigin: 'center' }} // Slightly smaller fill to keep stroke visible
-           />
-        )}
+        {/* Mouth Interior (Dark) */}
+        <path 
+          d={getInteriorPath()} 
+          fill="#450a0a" // Dark red/black
+          className="transition-all duration-300 ease-in-out"
+        />
+
+        {/* Tongue (Pink/Red) */}
+        <path 
+          d={getTonguePath()} 
+          fill="#fb7185" // Rose-400
+          className="transition-all duration-300 ease-in-out"
+        />
+
+        {/* Teeth (White) */}
+        <path 
+          d={getTeethPath()} 
+          fill="#ffffff" 
+          className="transition-all duration-300 ease-in-out"
+        />
+
+        {/* Lips (Stroke) */}
+        <path 
+          d={getInteriorPath()} 
+          fill="none" 
+          stroke="#ef4444" // Red-500
+          strokeWidth={isAnimating ? "6" : "4"}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="transition-all duration-300 ease-in-out"
+        />
+
+        {/* Lip Shine (Highlight) */}
+        <path 
+          d={getInteriorPath()} 
+          fill="none" 
+          stroke="white" 
+          strokeWidth="2"
+          strokeDasharray="5, 15"
+          strokeOpacity="0.4"
+          className="transition-all duration-300 ease-in-out"
+        />
+
       </svg>
       
       {/* Labels */}
-      <div className="absolute top-2 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+      <div className="absolute top-4 text-[10px] text-orange-300 font-bold uppercase tracking-wider">
         {isAnimating ? shape : 'Rest'}
       </div>
-      <div className={`absolute bottom-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${
-        isAnimating && voicing === 'voiced' ? 'text-red-400' : 'text-slate-300'
+      <div className={`absolute bottom-4 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+        isAnimating && voicing === 'voiced' ? 'text-red-500' : 'text-orange-300'
       }`}>
         {voicing}
       </div>
@@ -148,12 +235,20 @@ export const IPAChart: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
 
+  // Audio Cache: Stores Promise of base64 string
+  const audioCache = useRef<Map<string, Promise<string | null>>>(new Map());
+
   const handleSymbolClick = async (symbol: string) => {
     setSelectedSymbol(symbol);
     setLoading(true);
     setTutorial(null);
     setIsAnimating(false);
-
+    
+    // Pre-fetch audio immediately when symbol is clicked
+    if (!audioCache.current.has(symbol)) {
+      audioCache.current.set(symbol, generateSymbolAudio(symbol));
+    }
+    
     const data = await explainIPASymbol(symbol);
     setTutorial(data);
     setLoading(false);
@@ -165,34 +260,54 @@ export const IPAChart: React.FC = () => {
     setIsAnimating(false);
   };
 
-  const playSymbol = () => {
+  const playSymbol = async () => {
     if (!selectedSymbol) return;
     setIsAnimating(true);
     window.speechSynthesis.cancel();
     
-    // Attempt to make a clearer sound for just the symbol
-    // Often tricky with TTS, but providing a short carrier word or just the sound helps.
-    // For vowels, just the vowel. For consonants, maybe adding a schwa if plosive.
-    let textToSpeak = selectedSymbol;
-    // Basic heuristics for better TTS output of raw phonemes (imperfect but better than silence)
-    if (VOWELS.some(v => v.symbol === selectedSymbol)) textToSpeak = selectedSymbol; 
-    // This is a simplification; browsers struggle with raw IPA. 
-    // Better to speak the example word for the "symbol sound" button in this constrained environment
-    // OR try to map symbol to a rough approximation. 
-    // Ideally, we'd have audio files. 
-    // Fallback: Speak the "Example" word but focus user attention on the visual.
-    
-    // Let's speak the example word as the best proxy for the sound in a browser context without assets
-    const word = tutorial?.examples.initial || "sound";
-    const utterance = new SpeechSynthesisUtterance(word);
-    utterance.lang = 'en-GB';
-    utterance.rate = 0.8; // Slower
-    
-    utterance.onend = () => setIsAnimating(false);
-    window.speechSynthesis.speak(utterance);
-    
-    // Fallback timeout in case onend doesn't fire
-    setTimeout(() => setIsAnimating(false), 2000);
+    try {
+      // Check cache first
+      let audioPromise = audioCache.current.get(selectedSymbol);
+      
+      // If not in cache (fallback), fetch it
+      if (!audioPromise) {
+        audioPromise = generateSymbolAudio(selectedSymbol);
+        audioCache.current.set(selectedSymbol, audioPromise);
+      }
+
+      const base64Audio = await audioPromise;
+      
+      if (base64Audio) {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        // Do not force sampleRate; let the browser/OS decide (usually 44.1k or 48k)
+        // This prevents errors on devices that don't support specific rates.
+        const audioContext = new AudioContextClass();
+        
+        const bytes = decodeBase64(base64Audio);
+        // Explicitly pass 24000 as the source sample rate from Gemini
+        const buffer = createAudioBuffer(bytes, audioContext, 24000);
+        
+        const source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+        source.onended = () => {
+            setIsAnimating(false);
+            audioContext.close(); // Clean up context to free resources
+        };
+        source.start(0);
+      } else {
+        // Fallback: Use synthesis but just the symbol
+        console.warn("AI TTS failed, using fallback");
+        const utterance = new SpeechSynthesisUtterance(selectedSymbol);
+        utterance.lang = 'en-GB';
+        utterance.rate = 0.8; 
+        utterance.onend = () => setIsAnimating(false);
+        window.speechSynthesis.speak(utterance);
+      }
+    } catch (error) {
+       console.error("Playback failed", error);
+       setIsAnimating(false);
+    }
   };
 
   const playWord = (word: string) => {
@@ -266,7 +381,7 @@ export const IPAChart: React.FC = () => {
       {/* Tutorial Modal Overlay */}
       {selectedSymbol && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-in fade-in duration-200 rounded-2xl">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-full">
+          <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
             
             {/* Modal Header */}
             <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex justify-between items-center shrink-0">
@@ -299,95 +414,81 @@ export const IPAChart: React.FC = () => {
               ) : tutorial ? (
                 <div className="space-y-6">
                   
-                  {/* Animation Section */}
-                  <div className="bg-slate-50 rounded-2xl p-6 flex flex-col items-center justify-center border border-slate-100">
-                    <div className="flex items-center gap-2 mb-4">
-                      <h4 className="font-semibold text-slate-700">Pronunciation Animation</h4>
-                    </div>
-                    
-                    <div className="flex items-center gap-8">
+                  {/* Top Section: Visuals and Description */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* SVG Animation */}
+                    <div className="bg-slate-50 rounded-2xl p-6 flex flex-col items-center justify-center border border-slate-100">
+                      <div className="flex items-center gap-2 mb-4">
+                        <h4 className="font-semibold text-slate-700">Digital Guide</h4>
+                      </div>
                       <MouthVisualizer 
                         shape={tutorial.mouthShape} 
                         voicing={tutorial.voicing} 
                         isAnimating={isAnimating} 
                       />
-                      
-                      <div className="flex flex-col gap-3">
+                      <div className="mt-4 flex flex-col gap-2 w-full">
                         <button
                           onClick={playSymbol}
                           disabled={isAnimating}
-                          className="flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95 disabled:opacity-50"
+                          className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg transition-all active:scale-95 disabled:opacity-50 text-sm font-medium"
                         >
-                          {isAnimating ? <Activity className="w-5 h-5 animate-pulse" /> : <Play className="w-5 h-5 fill-current" />}
-                          <span className="font-semibold">{isAnimating ? 'Playing...' : 'Play Sound'}</span>
+                          {isAnimating ? <Activity className="w-4 h-4 animate-pulse" /> : <Volume2 className="w-4 h-4" />}
+                          <span>Listen & Simulate</span>
                         </button>
-                        <div className="text-xs text-slate-400 text-center">
-                          {tutorial.mouthShape} • {tutorial.voicing}
+                      </div>
+                    </div>
+
+                    {/* How to produce (Moved here) */}
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 flex flex-col">
+                      <h4 className="text-slate-900 font-semibold mb-3 flex items-center gap-2">
+                         👄 Articulation Guide
+                      </h4>
+                      <p className="text-slate-600 text-sm leading-relaxed flex-1">
+                        {tutorial.howToProduce}
+                      </p>
+                      <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
+                        <div>
+                          <span className="text-xs text-slate-400 uppercase font-bold">Mouth Shape</span>
+                          <p className="text-sm font-medium text-slate-800 capitalize">{tutorial.mouthShape}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 uppercase font-bold">Voicing</span>
+                          <p className={`text-sm font-medium capitalize ${tutorial.voicing === 'voiced' ? 'text-red-500' : 'text-slate-800'}`}>
+                            {tutorial.voicing}
+                          </p>
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* How to produce */}
-                  <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
-                    <h4 className="text-indigo-900 font-semibold mb-2 flex items-center gap-2">
-                       👄 Articulation Guide
-                    </h4>
-                    <p className="text-slate-700 text-sm leading-relaxed">
-                      {tutorial.howToProduce}
-                    </p>
-                  </div>
-
                   {/* Positioning Examples */}
                   <div>
                     <h4 className="text-slate-800 font-semibold mb-3">Word Placement Examples</h4>
-                    <div className="space-y-3">
-                      
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {/* Initial */}
-                      <div className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-xl hover:border-indigo-200 hover:shadow-sm transition-all group">
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs font-bold text-slate-400 uppercase w-12">Start</span>
-                          <span className="font-medium text-slate-800 text-lg">{tutorial.examples.initial}</span>
+                      <div className="flex flex-col p-3 bg-slate-50 border border-slate-100 rounded-xl hover:border-indigo-200 transition-all">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase mb-1">Start</span>
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium text-slate-800">{tutorial.examples.initial}</span>
+                          <button onClick={() => playWord(tutorial.examples.initial)} className="text-indigo-400 hover:text-indigo-600"><Volume2 className="w-4 h-4"/></button>
                         </div>
-                        <button 
-                          onClick={() => playWord(tutorial.examples.initial)}
-                          className="p-2 text-indigo-500 hover:bg-indigo-50 rounded-full opacity-60 group-hover:opacity-100 transition-all"
-                          title="Listen"
-                        >
-                          <Volume2 className="w-5 h-5" />
-                        </button>
                       </div>
-
                       {/* Medial */}
-                      <div className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-xl hover:border-indigo-200 hover:shadow-sm transition-all group">
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs font-bold text-slate-400 uppercase w-12">Middle</span>
-                          <span className="font-medium text-slate-800 text-lg">{tutorial.examples.medial}</span>
+                      <div className="flex flex-col p-3 bg-slate-50 border border-slate-100 rounded-xl hover:border-indigo-200 transition-all">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase mb-1">Middle</span>
+                         <div className="flex justify-between items-center">
+                          <span className="font-medium text-slate-800">{tutorial.examples.medial}</span>
+                          <button onClick={() => playWord(tutorial.examples.medial)} className="text-indigo-400 hover:text-indigo-600"><Volume2 className="w-4 h-4"/></button>
                         </div>
-                        <button 
-                          onClick={() => playWord(tutorial.examples.medial)}
-                          className="p-2 text-indigo-500 hover:bg-indigo-50 rounded-full opacity-60 group-hover:opacity-100 transition-all"
-                           title="Listen"
-                        >
-                          <Volume2 className="w-5 h-5" />
-                        </button>
                       </div>
-
                       {/* Final */}
-                      <div className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-xl hover:border-indigo-200 hover:shadow-sm transition-all group">
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs font-bold text-slate-400 uppercase w-12">End</span>
-                          <span className="font-medium text-slate-800 text-lg">{tutorial.examples.final}</span>
+                      <div className="flex flex-col p-3 bg-slate-50 border border-slate-100 rounded-xl hover:border-indigo-200 transition-all">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase mb-1">End</span>
+                         <div className="flex justify-between items-center">
+                          <span className="font-medium text-slate-800">{tutorial.examples.final}</span>
+                          <button onClick={() => playWord(tutorial.examples.final)} className="text-indigo-400 hover:text-indigo-600"><Volume2 className="w-4 h-4"/></button>
                         </div>
-                        <button 
-                          onClick={() => playWord(tutorial.examples.final)}
-                          className="p-2 text-indigo-500 hover:bg-indigo-50 rounded-full opacity-60 group-hover:opacity-100 transition-all"
-                           title="Listen"
-                        >
-                          <Volume2 className="w-5 h-5" />
-                        </button>
                       </div>
-
                     </div>
                   </div>
 
@@ -402,7 +503,7 @@ export const IPAChart: React.FC = () => {
             {/* Footer */}
             {tutorial && !loading && (
                <div className="p-4 bg-slate-50 border-t border-slate-100 text-center">
-                 <p className="text-xs text-slate-400">Generated by Gemini AI</p>
+                 <p className="text-xs text-slate-400">Powered by Gemini AI</p>
                </div>
             )}
           </div>

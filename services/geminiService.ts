@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -106,6 +106,35 @@ export const explainIPASymbol = async (symbol: string): Promise<{
       voicing: "voiceless",
       examples: { initial: "-", medial: "-", final: "-" }
     };
+  }
+};
+
+export const generateSymbolAudio = async (symbol: string): Promise<string | null> => {
+  try {
+    // Re-initialize to ensure fresh key if available
+    const freshAi = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // Explicit prompt to isolate the sound
+    const prompt = `Pronounce the English IPA sound /${symbol}/ clearly in isolation.`;
+
+    const response = await freshAi.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text: prompt }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: 'Kore' },
+          },
+        },
+      },
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    return base64Audio || null;
+  } catch (error) {
+    console.error("Gemini TTS Error:", error);
+    return null;
   }
 };
 
